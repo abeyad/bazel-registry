@@ -29,6 +29,11 @@ run_case \
     '[{"module":"many","version":"2.0.envoy","kept":"3.0.envoy"}]'
 
 run_case \
+    "mixed metadata and directory-only cases keep only the last unpublished entry" \
+    '{"published":{"currentdir":["1.0.envoy"],"dironlymulti":["1.0.envoy"],"dirsync":["1.0.envoy","2.0.envoy"],"metadataonly":["1.0.envoy"]},"current":{"currentdir":["1.0.envoy","2.0.envoy","3.0.envoy"],"dironlymulti":["1.0.envoy","2.0.envoy","3.0.envoy"],"dirsync":["1.0.envoy","2.0.envoy","3.0.envoy"],"metadataonly":["1.0.envoy","2.0.envoy","3.0.envoy"]}}' \
+    '[{"module":"currentdir","version":"2.0.envoy","kept":"3.0.envoy"},{"module":"dironlymulti","version":"2.0.envoy","kept":"3.0.envoy"},{"module":"metadataonly","version":"2.0.envoy","kept":"3.0.envoy"}]'
+
+run_case \
     "brand new module removes all but latest unpublished version" \
     '{"published":{"published":["1.0.envoy"]},"current":{"fresh":["0.1.envoy","0.2.envoy","0.3.envoy"],"published":["1.0.envoy"]}}' \
     '[{"module":"fresh","version":"0.1.envoy","kept":"0.3.envoy"},{"module":"fresh","version":"0.2.envoy","kept":"0.3.envoy"}]'

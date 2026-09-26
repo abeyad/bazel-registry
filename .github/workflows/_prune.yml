@@ -122,14 +122,18 @@ jobs:
 
         build_current_set() {
             local modules_json='{}'
-            local metadata_path module_dir module metadata_versions dir_versions versions version_dir version
+            local module_dir module metadata_path metadata_versions dir_versions versions version_dir version
             local dir_names=()
 
             shopt -s nullglob
-            for metadata_path in modules/*/metadata.json; do
-                module_dir="$(dirname "${metadata_path}")"
+            for module_dir in modules/*/; do
+                module_dir="${module_dir%/}"
                 module="$(basename "${module_dir}")"
-                metadata_versions="$(jq -c '.versions // []' "${metadata_path}")"
+                metadata_path="${module_dir}/metadata.json"
+                metadata_versions='[]'
+                if [[ -f "${metadata_path}" ]]; then
+                    metadata_versions="$(jq -c '.versions // []' "${metadata_path}")"
+                fi
                 dir_names=()
 
                 for version_dir in "${module_dir}"/*/; do
