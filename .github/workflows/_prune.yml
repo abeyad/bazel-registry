@@ -1,0 +1,212 @@
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    secrets:
+      app-id:
+      app-key:
+    inputs:
+      committer-email:
+        required: true
+        type: string
+      committer-name:
+        required: true
+        type: string
+      dry-run:
+        default: false
+        type: boolean
+
+
+jobs:
+  prune:
+    name: Prune unpublished module versions
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: envoyproxy/toolshed/actions/appauth@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      id: appauth
+      name: Appauth
+      if: >-
+        ! inputs.dry-run
+      with:
+        app_id: ${{ secrets.app-id }}
+        key: ${{ secrets.app-key }}
+    - id: checkout
+      name: Checkout the repository
+      uses: envoyproxy/toolshed/actions/github/checkout@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        branch: main
+        committer-name: ${{ inputs.committer-name }}
+        committer-email: ${{ inputs.committer-email }}
+        token: ${{ steps.appauth.outputs.token }}
+    - name: Fetch full history and tags
+      run: |
+        if [[ -f .git/shallow ]]; then
+            git fetch --force --prune --tags --unshallow origin main
+        else
+            git fetch --force --prune --tags origin main
+        fi
+    - name: Resolve published baseline
+      id: baseline
+      env:
+        GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
+      run: |
+        published_ref="$(gh release view \
+            --json tagName \
+            --jq '.tagName // ""' \
+            --repo "${{ github.repository }}" 2>/dev/null || true)"
+        if [[ -n "${published_ref}" ]]; then
+            echo "Published baseline: ${published_ref}"
+        else
+            echo "Published baseline: none (never published)"
+        fi
+        echo "published_ref=${published_ref}" >> "$GITHUB_OUTPUT"
+    - name: Build prune plan
+      id: plan
+      env:
+        PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
+      run: |
+        python3 - <<'PY'
+        import json
+        import os
+        import pathlib
+        import sys
+
+        sys.path.insert(0, str(pathlib.Path(".github/workflows").resolve()))
+        import registry_published
+
+        published_ref = os.environ.get("PUBLISHED_REF", "")
+        published = registry_published.published_pairs(published_ref)
+        unpublished = registry_published.unpublished_versions("modules", published)
+        keep = {
+            module: versions[-1]
+            for module, versions in unpublished.items()
+            if len(versions) > 1
+        }
+        plan = registry_published.prune_plan("modules", published)
+        body_lines = [
+            "Created by publish-envoy[bot] for @${{ github.actor }}",
+            "",
+            "Published baseline: "
+            + (published_ref if published_ref else "none — never published"),
+            "",
+            "Removals:",
+        ]
+        for entry in plan:
+            body_lines.append(
+                f"- `{entry['module']}@{entry['version']}` "
+                f"(kept `{entry['module']}@{keep[entry['module']]}`)")
+        pathlib.Path("prune-plan.json").write_text(
+            json.dumps(plan, separators=(",", ":")))
+        pathlib.Path("prune-keep.json").write_text(
+            json.dumps(keep, sort_keys=True, separators=(",", ":")))
+        pathlib.Path("prune-pr-body.txt").write_text("\n".join(body_lines) + "\n")
+        print(f"Prune plan: {json.dumps(plan, separators=(',', ':'))}")
+        PY
+        count="$(python3 - <<'PY'
+        import json
+        import pathlib
+        print(len(json.loads(pathlib.Path('prune-plan.json').read_text())))
+        PY
+        )"
+        echo "count=${count}" >> "$GITHUB_OUTPUT"
+        if [[ "${count}" -eq 0 ]]; then
+            echo "nothing to prune"
+            echo "has_plan=false" >> "$GITHUB_OUTPUT"
+        else
+            echo "has_plan=true" >> "$GITHUB_OUTPUT"
+        fi
+        {
+            echo "body<<EOF"
+            cat prune-pr-body.txt
+            echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - name: Prune superseded versions
+      if: steps.plan.outputs.has_plan == 'true'
+      env:
+        PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
+      run: |
+        python3 - <<'PY'
+        import json
+        import pathlib
+        import subprocess
+
+        plan = json.loads(pathlib.Path("prune-plan.json").read_text())
+        keep = json.loads(pathlib.Path("prune-keep.json").read_text())
+
+        for entry in plan:
+            module = entry["module"]
+            version = entry["version"]
+            kept = keep[module]
+            module_dir = pathlib.Path("modules") / module
+            version_dir = module_dir / version
+            metadata_path = module_dir / "metadata.json"
+            data = json.loads(metadata_path.read_text())
+            changed = False
+            if version_dir.exists():
+                subprocess.run(
+                    ["git", "rm", "-r", str(version_dir)],
+                    check=True)
+                changed = True
+            original_versions = list(data.get("versions", []))
+            data["versions"] = [
+                current
+                for current in original_versions
+                if current != version]
+            yanked_versions = data.get("yanked_versions")
+            had_yanked_version = (
+                isinstance(yanked_versions, dict)
+                and version in yanked_versions)
+            if isinstance(yanked_versions, dict) and version in yanked_versions:
+                del yanked_versions[version]
+            if data["versions"] != original_versions or had_yanked_version:
+                metadata_path.write_text(json.dumps(data, indent=4) + "\n")
+                subprocess.run(["git", "add", str(metadata_path)], check=True)
+                changed = True
+            if not changed:
+                continue
+            subprocess.run(
+                [
+                    "git",
+                    "commit",
+                    "--signoff",
+                    "-m",
+                    f"prune: {module} {version}",
+                    "-m",
+                    (
+                        f"Remove unpublished version {module}@{version} because it "
+                        f"was superseded before publication by {module}@{kept}."
+                    ),
+                ],
+                check=True)
+        PY
+    - name: Show dry-run commits
+      if: inputs.dry-run && steps.plan.outputs.has_plan == 'true'
+      run: |
+        echo "Dry run: no pull request will be created"
+        git log --stat --oneline --reverse origin/main..HEAD
+    - name: Push prune branch
+      if: >-
+        ! inputs.dry-run
+        && steps.plan.outputs.has_plan == 'true'
+      env:
+        BRANCH_NAME: prune/unpublished-versions/${{ github.run_id }}
+        GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
+      run: |
+        git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
+            HEAD:"refs/heads/${BRANCH_NAME}"
+    - name: Create Pull Request
+      if: >-
+        ! inputs.dry-run
+        && steps.plan.outputs.has_plan == 'true'
+      uses: envoyproxy/toolshed/actions/github/pr@98b13b6d4f551c27b406cb090d9ff7bf6877d1f6  # actions-v0.4.20 + fix
+      with:
+        base: main
+        branch: prune/unpublished-versions/${{ github.run_id }}
+        commit: false
+        title: Prune superseded unpublished module versions
+        body: ${{ steps.plan.outputs.body }}
+        dry-run: ${{ inputs.dry-run }}
+        GITHUB_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
