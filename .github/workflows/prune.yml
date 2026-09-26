@@ -1,0 +1,28 @@
+name: Prune unpublished module versions
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Dry run (no PR created).
+        type: boolean
+        default: false
+  schedule:
+  - cron: '0 4 * * 0'
+
+
+jobs:
+  prune:
+    permissions:
+      contents: write
+    secrets:
+      app-id: ${{ ! inputs.dry-run && secrets.ENVOY_CI_PUBLISH_APP_ID }}
+      app-key: ${{ ! inputs.dry-run && secrets.ENVOY_CI_PUBLISH_APP_KEY }}
+    uses: ./.github/workflows/_prune.yml
+    with:
+      committer-email: 140627008+publish-envoy[bot]@users.noreply.github.com
+      committer-name: publish-envoy[bot]
+      dry-run: ${{ inputs.dry-run || false }}
