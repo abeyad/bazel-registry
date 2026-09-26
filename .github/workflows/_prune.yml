@@ -65,186 +65,153 @@ jobs:
             echo "Published baseline: none (never published)"
         fi
         echo "published_ref=${published_ref}" >> "$GITHUB_OUTPUT"
-    - name: Build prune plan
-      id: plan
+    - name: Read prune plan filter
+      id: prune_filter
+      run: |
+        {
+            echo "filter<<EOF"
+            cat .github/workflows/registry_prune_plan.jq
+            echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - name: Build published set
+      id: published
       env:
         PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
       run: |
         set -euo pipefail
+        if [[ -n "${PUBLISHED_REF}" ]]; then
+            published_json="$(git ls-tree -r -d --name-only "${PUBLISHED_REF}" modules \
+                | jq -cRs 'split("\n")
+                    | map(select(length > 0) | split("/"))
+                    | map(select(length == 3))
+                    | group_by(.[1])
+                    | map({key: .[0][1], value: map(.[2])})
+                    | from_entries')"
+        else
+            published_json='{}'
+        fi
 
-        build_published_set() {
-            local ref="$1"
-            local modules_json='{}'
-            local module
+        echo "value=${published_json}" >> "$GITHUB_OUTPUT"
+    - name: Build current set
+      id: current
+      run: |
+        set -euo pipefail
 
-            if [[ -z "${ref}" ]]; then
-                printf '{}\n'
-                return
-            fi
+        metadata_json="$(jq -cn \
+            '[inputs
+              | {key: (input_filename | split("/")[-2]), value: (.versions // [])}]
+            | from_entries' \
+            modules/*/metadata.json)"
 
-            while IFS= read -r module; do
-                local metadata_json metadata_versions dir_versions versions
-                local dir_names=()
-                local line
-
-                [[ -n "${module}" ]] || continue
-
-                metadata_versions='[]'
-                if metadata_json="$(git show "${ref}:modules/${module}/metadata.json" 2>/dev/null)"; then
-                    metadata_versions="$(jq -c '.versions // []' <<< "${metadata_json}")"
-                fi
-
-                while IFS= read -r line; do
-                    [[ -n "${line}" ]] || continue
-                    dir_names+=("${line}")
-                done < <(git ls-tree -d --name-only "${ref}:modules/${module}" 2>/dev/null || true)
-
-                dir_versions='[]'
-                if [[ ${#dir_names[@]} -gt 0 ]]; then
-                    dir_versions="$(printf '%s\n' "${dir_names[@]}" | jq -Rsc 'split("\n")[:-1]')"
-                fi
-
-                versions="$(jq -cn \
-                    --argjson metadata "${metadata_versions}" \
-                    --argjson dirs "${dir_versions}" \
-                    'reduce ($metadata + $dirs)[] as $version
-                        ([]; if index($version) == null then . + [$version] else . end)')"
-
-                modules_json="$(jq -cn \
-                    --argjson modules "${modules_json}" \
-                    --arg module "${module}" \
-                    --argjson versions "${versions}" \
-                    '$modules + {($module): $versions}')"
-            done < <(git ls-tree -d --name-only "${ref}:modules" 2>/dev/null || true)
-
-            printf '%s\n' "${modules_json}"
-        }
-
-        build_current_set() {
-            local modules_json='{}'
-            local module_dir module metadata_path metadata_versions dir_versions versions version_dir version
-            local dir_names=()
-
+        current_json="$(
             shopt -s nullglob
-            for module_dir in modules/*/; do
-                module_dir="${module_dir%/}"
-                module="$(basename "${module_dir}")"
-                metadata_path="${module_dir}/metadata.json"
-                metadata_versions='[]'
-                if [[ -f "${metadata_path}" ]]; then
-                    metadata_versions="$(jq -c '.versions // []' "${metadata_path}")"
-                fi
-                dir_names=()
-
-                for version_dir in "${module_dir}"/*/; do
-                    version="${version_dir%/}"
-                    version="${version##*/}"
-                    dir_names+=("${version}")
-                done
-
-                dir_versions='[]'
-                if [[ ${#dir_names[@]} -gt 0 ]]; then
-                    dir_versions="$(printf '%s\n' "${dir_names[@]}" | jq -Rsc 'split("\n")[:-1]')"
-                fi
-
-                versions="$(jq -cn \
-                    --argjson metadata "${metadata_versions}" \
-                    --argjson dirs "${dir_versions}" \
-                    'reduce ($metadata + $dirs)[] as $version
-                        ([]; if index($version) == null then . + [$version] else . end)')"
-
-                modules_json="$(jq -cn \
-                    --argjson modules "${modules_json}" \
-                    --arg module "${module}" \
-                    --argjson versions "${versions}" \
-                    '$modules + {($module): $versions}')"
-            done
+            printf '%s\n' modules/*/*/ \
+                | jq -cRs --argjson metadata "${metadata_json}" '
+                    $metadata as $metadata
+                    | (split("\n")
+                        | map(select(length > 0) | rtrimstr("/") | split("/"))
+                        | map(select(length == 3) | {module: .[1], version: .[2]})
+                        | group_by(.module)
+                        | map({key: .[0].module, value: map(.version)})
+                        | from_entries) as $dirs
+                    | reduce (($metadata + $dirs) | keys_unsorted[]) as $module
+                        ({};
+                         . + {
+                           ($module): (
+                             ($metadata[$module] // [])
+                             + [($dirs[$module] // [])[]
+                                | select((($metadata[$module] // []) | index(.)) == null)]
+                           )
+                         })'
             shopt -u nullglob
+        )"
 
-            printf '%s\n' "${modules_json}"
-        }
-
-        published_json="$(build_published_set "${PUBLISHED_REF}")"
-        current_json="$(build_current_set)"
-
-        jq -cn \
-            --argjson published "${published_json}" \
-            --argjson current "${current_json}" \
-            '{published: $published, current: $current}' \
-            | jq -c -f .github/workflows/registry_prune_plan.jq > prune-plan.json
-
-        jq -r \
-            --arg actor "${{ github.actor }}" \
-            --arg baseline "${PUBLISHED_REF}" \
-            '[
-                "Created by publish-envoy[bot] for @" + $actor,
-                "",
-                "Published baseline: "
-                    + (if $baseline == "" then "none — never published" else $baseline end),
-                "",
-                "Removals:"
-            ]
-            + (map("- `\(.module)@\(.version)` (kept `\(.module)@\(.kept)`)"))
-            | .[]' \
-            prune-plan.json > prune-pr-body.txt
-
-        echo "Prune plan: $(jq -c . prune-plan.json)"
-
-        count="$(jq 'length' prune-plan.json)"
-        echo "count=${count}" >> "$GITHUB_OUTPUT"
-        if [[ "${count}" -eq 0 ]]; then
+        echo "value=${current_json}" >> "$GITHUB_OUTPUT"
+    - name: Build prune plan
+      id: plan
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -c
+        input: |
+          published: ${{ steps.published.outputs.value }}
+          current: ${{ steps.current.outputs.value }}
+        filter: ${{ steps.prune_filter.outputs.filter }}
+    - name: Count prune plan entries
+      id: plan_count
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -r
+        input: ${{ steps.plan.outputs.value }}
+        filter: |
+          length
+    - name: Build prune pull request body
+      id: pr_body
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -r
+        input: |
+          actor: ${{ github.actor }}
+          baseline: ${{ steps.baseline.outputs.published_ref || '' }}
+          plan: ${{ steps.plan.outputs.value }}
+        filter: |
+          [
+            "Created by publish-envoy[bot] for @" + .actor,
+            "",
+            "Published baseline: "
+                + (if .baseline == "" then "none — never published" else .baseline end),
+            "",
+            "Removals:"
+          ]
+          + (.plan | map("- `\(.module)@\(.version)` (kept `\(.module)@\(.kept)`)"))
+          | .[]
+    - name: Report prune plan
+      id: plan_summary
+      env:
+        PLAN: ${{ steps.plan.outputs.value }}
+        COUNT: ${{ steps.plan_count.outputs.value }}
+      run: |
+        set -euo pipefail
+        echo "Prune plan: ${PLAN}"
+        if [[ "${COUNT}" -eq 0 ]]; then
             echo "nothing to prune"
             echo "has_plan=false" >> "$GITHUB_OUTPUT"
         else
             echo "has_plan=true" >> "$GITHUB_OUTPUT"
         fi
-        {
-            echo "body<<EOF"
-            cat prune-pr-body.txt
-            echo "EOF"
-        } >> "$GITHUB_OUTPUT"
     - name: Prune superseded versions
-      if: steps.plan.outputs.has_plan == 'true'
-      run: |
-        set -euo pipefail
-
-        jq -c '.[]' prune-plan.json | while IFS= read -r entry; do
-            module="$(jq -r '.module' <<< "${entry}")"
-            version="$(jq -r '.version' <<< "${entry}")"
-            kept="$(jq -r '.kept' <<< "${entry}")"
-            metadata_path="modules/${module}/metadata.json"
-            changed=false
-
-            if [[ -d "modules/${module}/${version}" ]]; then
-                git rm -r -q "modules/${module}/${version}"
-                changed=true
-            fi
-
-            tmp_metadata="$(mktemp /tmp/metadata.XXXXXX)"
-            jq --indent 4 \
-                --arg v "${version}" \
-                '.versions -= [$v]
-                 | if (.yanked_versions | type) == "object" then del(.yanked_versions[$v]) else . end' \
-                "${metadata_path}" > "${tmp_metadata}"
-
-            if ! cmp -s "${tmp_metadata}" "${metadata_path}"; then
-                mv "${tmp_metadata}" "${metadata_path}"
-                git add "${metadata_path}"
-                changed=true
-            else
-                rm -f "${tmp_metadata}"
-            fi
-
-            if [[ "${changed}" != "true" ]]; then
-                continue
-            fi
-
-            git commit -q --signoff \
-                -m "prune: ${module} ${version}" \
-                -m "Remove unpublished version ${module}@${version}, superseded before publication by ${module}@${kept}."
-        done
+      if: steps.plan_summary.outputs.has_plan == 'true'
+      uses: envoyproxy/toolshed/actions/bson@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        input: ${{ steps.plan.outputs.value }}
+        filter: |
+          map(
+            "changed=false\n"
+            + "metadata_path=" + ("modules/\(.module)/metadata.json" | @sh) + "\n"
+            + "if [[ -d " + ("modules/\(.module)/\(.version)" | @sh) + " ]]; then\n"
+            + "  git rm -r -q " + ("modules/\(.module)/\(.version)" | @sh) + "\n"
+            + "  changed=true\n"
+            + "fi\n"
+            + "tmp_metadata=$(mktemp /tmp/metadata.XXXXXX)\n"
+            + "jq --indent 4 --arg v " + (.version | @sh)
+            + " '.versions -= [$v] | if (.yanked_versions | type) == \"object\" then del(.yanked_versions[$v]) else . end' "
+            + ("modules/\(.module)/metadata.json" | @sh) + " > \"$tmp_metadata\"\n"
+            + "if ! cmp -s \"$tmp_metadata\" \"$metadata_path\"; then\n"
+            + "  mv \"$tmp_metadata\" \"$metadata_path\"\n"
+            + "  git add \"$metadata_path\"\n"
+            + "  changed=true\n"
+            + "else\n"
+            + "  rm -f \"$tmp_metadata\"\n"
+            + "fi\n"
+            + "if [[ \"$changed\" == \"true\" ]]; then\n"
+            + "  git commit -q --signoff "
+            + "-m " + ("prune: \(.module) \(.version)" | @sh) + " "
+            + "-m "
+            + ("Remove unpublished version \(.module)@\(.version), superseded before publication by \(.module)@\(.kept)." | @sh) + "\n"
+            + "fi"
+          )
+          | join("\n")
     - name: Show dry-run commits
-      if: inputs.dry-run && steps.plan.outputs.has_plan == 'true'
+      if: inputs.dry-run && steps.plan_summary.outputs.has_plan == 'true'
       run: |
         set -euo pipefail
         echo "Dry run: no pull request will be created"
@@ -252,7 +219,7 @@ jobs:
     - name: Push prune branch
       if: >-
         ! inputs.dry-run
-        && steps.plan.outputs.has_plan == 'true'
+        && steps.plan_summary.outputs.has_plan == 'true'
       env:
         BRANCH_NAME: prune/unpublished-versions/${{ github.run_id }}
         GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
@@ -263,13 +230,13 @@ jobs:
     - name: Create Pull Request
       if: >-
         ! inputs.dry-run
-        && steps.plan.outputs.has_plan == 'true'
+        && steps.plan_summary.outputs.has_plan == 'true'
       uses: envoyproxy/toolshed/actions/github/pr@98b13b6d4f551c27b406cb090d9ff7bf6877d1f6  # actions-v0.4.20 + fix
       with:
         base: main
         branch: prune/unpublished-versions/${{ github.run_id }}
         commit: false
         title: Prune superseded unpublished module versions
-        body: ${{ steps.plan.outputs.body }}
+        body: ${{ steps.pr_body.outputs.value }}
         dry-run: ${{ inputs.dry-run }}
         GITHUB_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
