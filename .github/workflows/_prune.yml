@@ -1,0 +1,263 @@
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    secrets:
+      app-id:
+      app-key:
+    inputs:
+      committer-email:
+        required: true
+        type: string
+      committer-name:
+        required: true
+        type: string
+      dry-run:
+        default: false
+        type: boolean
+
+
+jobs:
+  prune:
+    name: Prune unpublished module versions
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: envoyproxy/toolshed/actions/appauth@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      id: appauth
+      name: Appauth
+      if: >-
+        ! inputs.dry-run
+      with:
+        app_id: ${{ secrets.app-id }}
+        key: ${{ secrets.app-key }}
+    - id: checkout
+      name: Checkout the repository
+      uses: envoyproxy/toolshed/actions/github/checkout@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        branch: main
+        committer-name: ${{ inputs.committer-name }}
+        committer-email: ${{ inputs.committer-email }}
+        token: ${{ steps.appauth.outputs.token }}
+    - name: Fetch full history and tags
+      run: |
+        set -euo pipefail
+        if [[ -f .git/shallow ]]; then
+            git fetch --force --prune --tags --unshallow origin main
+        else
+            git fetch --force --prune --tags origin main
+        fi
+    - name: Resolve published baseline
+      id: baseline
+      env:
+        GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
+      run: |
+        set -euo pipefail
+        published_ref="$(gh release view \
+            --json tagName \
+            --jq '.tagName // ""' \
+            --repo "${{ github.repository }}" 2>/dev/null || true)"
+        if [[ -n "${published_ref}" ]]; then
+            echo "Published baseline: ${published_ref}"
+        else
+            echo "Published baseline: none (never published)"
+        fi
+        echo "published_ref=${published_ref}" >> "$GITHUB_OUTPUT"
+    - name: Read prune plan filter
+      id: prune_filter
+      run: |
+        {
+            echo "filter<<EOF"
+            cat .github/workflows/registry_prune_plan.jq
+            echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - name: Build published set
+      id: published
+      env:
+        PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
+      run: |
+        set -euo pipefail
+        if [[ -n "${PUBLISHED_REF}" ]]; then
+            published_json="$(git ls-tree -r -d --name-only "${PUBLISHED_REF}" modules \
+                | jq -cRs 'split("\n")
+                    | map(select(length > 0) | split("/"))
+                    | map(select(length == 3))
+                    | group_by(.[1])
+                    | map({key: .[0][1], value: map(.[2])})
+                    | from_entries')"
+        else
+            published_json='{}'
+        fi
+
+        echo "value=${published_json}" >> "$GITHUB_OUTPUT"
+    - name: Build current set
+      id: current
+      run: |
+        set -euo pipefail
+
+        metadata_json="$(jq -cn \
+            '[inputs
+              | {key: (input_filename | split("/")[-2]), value: (.versions // [])}]
+            | from_entries' \
+            modules/*/metadata.json)"
+
+        current_json="$({
+            shopt -s nullglob
+            printf '%s\n' modules/*/*/ \
+                | jq -cRs --argjson metadata "${metadata_json}" '
+                    $metadata as $metadata
+                    | (split("\n")
+                        | map(select(length > 0) | rtrimstr("/") | split("/"))
+                        | map(select(length == 3) | {module: .[1], version: .[2]})
+                        | group_by(.module)
+                        | map({key: .[0].module, value: map(.version)})
+                        | from_entries) as $dirs
+                    | reduce (($metadata + $dirs) | keys_unsorted[]) as $module
+                        ({};
+                         . + {
+                           ($module): (
+                             ($metadata[$module] // [])
+                             + [($dirs[$module] // [])[]
+                                | select((($metadata[$module] // []) | index(.)) == null)]
+                           )
+                         })'
+            shopt -u nullglob
+        })"
+
+        echo "value=${current_json}" >> "$GITHUB_OUTPUT"
+    - name: Build prune plan input
+      id: plan_input
+      env:
+        PUBLISHED: ${{ steps.published.outputs.value }}
+        CURRENT: ${{ steps.current.outputs.value }}
+      run: |
+        set -euo pipefail
+        input_json="$(jq -cn \
+            --argjson published "${PUBLISHED}" \
+            --argjson current "${CURRENT}" \
+            '{published: $published, current: $current}')"
+        echo "value=${input_json}" >> "$GITHUB_OUTPUT"
+    - name: Build prune plan
+      id: plan
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -c
+        input: ${{ steps.plan_input.outputs.value }}
+        filter: ${{ steps.prune_filter.outputs.filter }}
+    - name: Count prune plan entries
+      id: plan_count
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -r
+        input: ${{ steps.plan.outputs.value }}
+        filter: |
+          length
+    - name: Build prune pull request input
+      id: pr_body_input
+      env:
+        ACTOR: ${{ github.actor }}
+        BASELINE: ${{ steps.baseline.outputs.published_ref || '' }}
+        PLAN: ${{ steps.plan.outputs.value }}
+      run: |
+        set -euo pipefail
+        input_json="$(jq -cn \
+            --arg actor "${ACTOR}" \
+            --arg baseline "${BASELINE}" \
+            --argjson plan "${PLAN}" \
+            '{actor: $actor, baseline: $baseline, plan: $plan}')"
+        echo "value=${input_json}" >> "$GITHUB_OUTPUT"
+    - name: Build prune pull request body
+      id: pr_body
+      uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        options: -r
+        input: ${{ steps.pr_body_input.outputs.value }}
+        filter: |
+          [
+            "Created by publish-envoy[bot] for @" + .actor,
+            "",
+            "Published baseline: "
+                + (if .baseline == "" then "none — never published" else .baseline end),
+            "",
+            "Removals:"
+          ]
+          + (.plan | map("- `\(.module)@\(.version)` (kept `\(.module)@\(.kept)`)"))
+          | .[]
+    - name: Report prune plan
+      id: plan_summary
+      env:
+        PLAN: ${{ steps.plan.outputs.value }}
+        COUNT: ${{ steps.plan_count.outputs.value }}
+      run: |
+        set -euo pipefail
+        echo "Prune plan: ${PLAN}"
+        if [[ "${COUNT}" -eq 0 ]]; then
+            echo "nothing to prune"
+            echo "has_plan=false" >> "$GITHUB_OUTPUT"
+        else
+            echo "has_plan=true" >> "$GITHUB_OUTPUT"
+        fi
+    - name: Prune superseded versions
+      if: steps.plan_summary.outputs.has_plan == 'true'
+      uses: envoyproxy/toolshed/actions/bson@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
+      with:
+        input: ${{ steps.plan.outputs.value }}
+        filter: |
+          map(
+            "changed=false\n"
+            + "metadata_path=" + ("modules/\(.module)/metadata.json" | @sh) + "\n"
+            + "if [[ -d " + ("modules/\(.module)/\(.version)" | @sh) + " ]]; then\n"
+            + "  git rm -r -q " + ("modules/\(.module)/\(.version)" | @sh) + "\n"
+            + "  changed=true\n"
+            + "fi\n"
+            + "tmp_metadata=$(mktemp /tmp/metadata.XXXXXX)\n"
+            + "jq --indent 4 --arg v " + (.version | @sh)
+            + " '.versions -= [$v] | if (.yanked_versions | type) == \"object\" then del(.yanked_versions[$v]) else . end' "
+            + ("modules/\(.module)/metadata.json" | @sh) + " > \"$tmp_metadata\"\n"
+            + "if ! cmp -s \"$tmp_metadata\" \"$metadata_path\"; then\n"
+            + "  mv \"$tmp_metadata\" \"$metadata_path\"\n"
+            + "  git add \"$metadata_path\"\n"
+            + "  changed=true\n"
+            + "else\n"
+            + "  rm -f \"$tmp_metadata\"\n"
+            + "fi\n"
+            + "if [[ \"$changed\" == \"true\" ]]; then\n"
+            + "  git commit -q --signoff "
+            + "-m " + ("prune: \(.module) \(.version)" | @sh) + " "
+            + "-m "
+            + ("Remove unpublished version \(.module)@\(.version), superseded before publication by \(.module)@\(.kept)." | @sh) + "\n"
+            + "fi"
+          )
+          | join("\n")
+    - name: Show dry-run commits
+      if: inputs.dry-run && steps.plan_summary.outputs.has_plan == 'true'
+      run: |
+        set -euo pipefail
+        echo "Dry run: no pull request will be created"
+        git log --stat --oneline --reverse origin/main..HEAD
+    - name: Push prune branch
+      if: >-
+        ! inputs.dry-run
+        && steps.plan_summary.outputs.has_plan == 'true'
+      env:
+        BRANCH_NAME: prune/unpublished-versions/${{ github.run_id }}
+        GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
+      run: |
+        set -euo pipefail
+        git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
+            HEAD:"refs/heads/${BRANCH_NAME}"
+    - name: Create Pull Request
+      if: >-
+        ! inputs.dry-run
+        && steps.plan_summary.outputs.has_plan == 'true'
+      uses: envoyproxy/toolshed/actions/github/pr@98b13b6d4f551c27b406cb090d9ff7bf6877d1f6  # actions-v0.4.20 + fix
+      with:
+        base: main
+        branch: prune/unpublished-versions/${{ github.run_id }}
+        commit: false
+        title: Prune superseded unpublished module versions
+        body: ${{ steps.pr_body.outputs.value }}
+        dry-run: ${{ inputs.dry-run }}
+        GITHUB_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
