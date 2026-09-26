@@ -127,14 +127,24 @@ jobs:
         )"
 
         echo "value=${current_json}" >> "$GITHUB_OUTPUT"
+    - name: Build prune plan input
+      id: plan_input
+      env:
+        PUBLISHED: ${{ steps.published.outputs.value }}
+        CURRENT: ${{ steps.current.outputs.value }}
+      run: |
+        set -euo pipefail
+        input_json="$(jq -cn \
+            --argjson published "${PUBLISHED}" \
+            --argjson current "${CURRENT}" \
+            '{published: $published, current: $current}')"
+        echo "value=${input_json}" >> "$GITHUB_OUTPUT"
     - name: Build prune plan
       id: plan
       uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
       with:
         options: -c
-        input: |
-          published: ${{ steps.published.outputs.value }}
-          current: ${{ steps.current.outputs.value }}
+        input: ${{ steps.plan_input.outputs.value }}
         filter: ${{ steps.prune_filter.outputs.filter }}
     - name: Count prune plan entries
       id: plan_count
@@ -144,15 +154,26 @@ jobs:
         input: ${{ steps.plan.outputs.value }}
         filter: |
           length
+    - name: Build prune pull request input
+      id: pr_body_input
+      env:
+        ACTOR: ${{ github.actor }}
+        BASELINE: ${{ steps.baseline.outputs.published_ref || '' }}
+        PLAN: ${{ steps.plan.outputs.value }}
+      run: |
+        set -euo pipefail
+        input_json="$(jq -cn \
+            --arg actor "${ACTOR}" \
+            --arg baseline "${BASELINE}" \
+            --argjson plan "${PLAN}" \
+            '{actor: $actor, baseline: $baseline, plan: $plan}')"
+        echo "value=${input_json}" >> "$GITHUB_OUTPUT"
     - name: Build prune pull request body
       id: pr_body
       uses: envoyproxy/toolshed/actions/jq@5291901f6f40a2246c78b89698ead70d39a2559b  # actions-v0.4.20
       with:
         options: -r
-        input: |
-          actor: ${{ github.actor }}
-          baseline: ${{ steps.baseline.outputs.published_ref || '' }}
-          plan: ${{ steps.plan.outputs.value }}
+        input: ${{ steps.pr_body_input.outputs.value }}
         filter: |
           [
             "Created by publish-envoy[bot] for @" + .actor,
