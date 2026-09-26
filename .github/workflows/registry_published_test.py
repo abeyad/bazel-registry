@@ -90,6 +90,7 @@ class RegistryPublishedTest(unittest.TestCase):
         self.write_module("dirsync", ["1.0.envoy"], dirs=["1.0.envoy", "2.0.envoy"])
         self.write_module("currentdir", ["1.0.envoy"])
         self.write_module("metadataonly", ["1.0.envoy"])
+        self.write_module("dironlymulti", ["1.0.envoy"])
         self.commit("published")
         self.git("tag", "v1")
 
@@ -100,6 +101,7 @@ class RegistryPublishedTest(unittest.TestCase):
         self.write_module("dirsync", ["1.0.envoy", "2.0.envoy", "3.0.envoy"])
         self.write_module("currentdir", ["1.0.envoy", "2.0.envoy"], dirs=["1.0.envoy", "2.0.envoy", "3.0.envoy"])
         self.write_module("metadataonly", ["1.0.envoy", "2.0.envoy", "3.0.envoy"], dirs=["1.0.envoy", "3.0.envoy"])
+        self.write_module("dironlymulti", ["1.0.envoy"], dirs=["1.0.envoy", "2.0.envoy", "3.0.envoy"])
         self.commit("current")
 
         published = registry_published.published_pairs("v1", self.modules_root)
@@ -113,6 +115,7 @@ class RegistryPublishedTest(unittest.TestCase):
                 "dirsync": ["3.0.envoy"],
                 "currentdir": ["2.0.envoy", "3.0.envoy"],
                 "metadataonly": ["2.0.envoy", "3.0.envoy"],
+                "dironlymulti": ["2.0.envoy", "3.0.envoy"],
             })
         self.assertEqual(
             registry_published.prune_plan(self.modules_root, published),
