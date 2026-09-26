@@ -43,6 +43,7 @@ jobs:
         token: ${{ steps.appauth.outputs.token }}
     - name: Fetch full history and tags
       run: |
+        set -euo pipefail
         if [[ -f .git/shallow ]]; then
             git fetch --force --prune --tags --unshallow origin main
         else
@@ -53,6 +54,7 @@ jobs:
       env:
         GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
       run: |
+        set -euo pipefail
         published_ref="$(gh release view \
             --json tagName \
             --jq '.tagName // ""' \
@@ -68,49 +70,123 @@ jobs:
       env:
         PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
       run: |
-        python3 - <<'PY'
-        import json
-        import os
-        import pathlib
-        import sys
+        set -euo pipefail
 
-        sys.path.insert(0, str(pathlib.Path(".github/workflows").resolve()))
-        import registry_published
+        build_published_set() {
+            local ref="$1"
+            local modules_json='{}'
+            local module
 
-        published_ref = os.environ.get("PUBLISHED_REF", "")
-        published = registry_published.published_pairs(published_ref)
-        unpublished = registry_published.unpublished_versions("modules", published)
-        keep = {
-            module: versions[-1]
-            for module, versions in unpublished.items()
-            if len(versions) > 1
+            if [[ -z "${ref}" ]]; then
+                printf '{}\n'
+                return
+            fi
+
+            while IFS= read -r module; do
+                local metadata_json metadata_versions dir_versions versions
+                local dir_names=()
+                local line
+
+                [[ -n "${module}" ]] || continue
+
+                metadata_versions='[]'
+                if metadata_json="$(git show "${ref}:modules/${module}/metadata.json" 2>/dev/null)"; then
+                    metadata_versions="$(jq -c '.versions // []' <<< "${metadata_json}")"
+                fi
+
+                while IFS= read -r line; do
+                    [[ -n "${line}" ]] || continue
+                    dir_names+=("${line}")
+                done < <(git ls-tree -d --name-only "${ref}:modules/${module}" 2>/dev/null || true)
+
+                dir_versions='[]'
+                if [[ ${#dir_names[@]} -gt 0 ]]; then
+                    dir_versions="$(printf '%s\n' "${dir_names[@]}" | jq -Rsc 'split("\n")[:-1]')"
+                fi
+
+                versions="$(jq -cn \
+                    --argjson metadata "${metadata_versions}" \
+                    --argjson dirs "${dir_versions}" \
+                    'reduce ($metadata + $dirs)[] as $version
+                        ([]; if index($version) == null then . + [$version] else . end)')"
+
+                modules_json="$(jq -cn \
+                    --argjson modules "${modules_json}" \
+                    --arg module "${module}" \
+                    --argjson versions "${versions}" \
+                    '$modules + {($module): $versions}')"
+            done < <(git ls-tree -d --name-only "${ref}:modules" 2>/dev/null || true)
+
+            printf '%s\n' "${modules_json}"
         }
-        plan = registry_published.prune_plan("modules", published)
-        body_lines = [
-            "Created by publish-envoy[bot] for @${{ github.actor }}",
-            "",
-            "Published baseline: "
-            + (published_ref if published_ref else "none — never published"),
-            "",
-            "Removals:",
-        ]
-        for entry in plan:
-            body_lines.append(
-                f"- `{entry['module']}@{entry['version']}` "
-                f"(kept `{entry['module']}@{keep[entry['module']]}`)")
-        pathlib.Path("prune-plan.json").write_text(
-            json.dumps(plan, separators=(",", ":")))
-        pathlib.Path("prune-keep.json").write_text(
-            json.dumps(keep, sort_keys=True, separators=(",", ":")))
-        pathlib.Path("prune-pr-body.txt").write_text("\n".join(body_lines) + "\n")
-        print(f"Prune plan: {json.dumps(plan, separators=(',', ':'))}")
-        PY
-        count="$(python3 - <<'PY'
-        import json
-        import pathlib
-        print(len(json.loads(pathlib.Path('prune-plan.json').read_text())))
-        PY
-        )"
+
+        build_current_set() {
+            local modules_json='{}'
+            local metadata_path module_dir module metadata_versions dir_versions versions version_dir version
+            local dir_names=()
+
+            shopt -s nullglob
+            for metadata_path in modules/*/metadata.json; do
+                module_dir="$(dirname "${metadata_path}")"
+                module="$(basename "${module_dir}")"
+                metadata_versions="$(jq -c '.versions // []' "${metadata_path}")"
+                dir_names=()
+
+                for version_dir in "${module_dir}"/*/; do
+                    version="${version_dir%/}"
+                    version="${version##*/}"
+                    dir_names+=("${version}")
+                done
+
+                dir_versions='[]'
+                if [[ ${#dir_names[@]} -gt 0 ]]; then
+                    dir_versions="$(printf '%s\n' "${dir_names[@]}" | jq -Rsc 'split("\n")[:-1]')"
+                fi
+
+                versions="$(jq -cn \
+                    --argjson metadata "${metadata_versions}" \
+                    --argjson dirs "${dir_versions}" \
+                    'reduce ($metadata + $dirs)[] as $version
+                        ([]; if index($version) == null then . + [$version] else . end)')"
+
+                modules_json="$(jq -cn \
+                    --argjson modules "${modules_json}" \
+                    --arg module "${module}" \
+                    --argjson versions "${versions}" \
+                    '$modules + {($module): $versions}')"
+            done
+            shopt -u nullglob
+
+            printf '%s\n' "${modules_json}"
+        }
+
+        published_json="$(build_published_set "${PUBLISHED_REF}")"
+        current_json="$(build_current_set)"
+
+        jq -cn \
+            --argjson published "${published_json}" \
+            --argjson current "${current_json}" \
+            '{published: $published, current: $current}' \
+            | jq -c -f .github/workflows/registry_prune_plan.jq > prune-plan.json
+
+        jq -r \
+            --arg actor "${{ github.actor }}" \
+            --arg baseline "${PUBLISHED_REF}" \
+            '[
+                "Created by publish-envoy[bot] for @" + $actor,
+                "",
+                "Published baseline: "
+                    + (if $baseline == "" then "none — never published" else $baseline end),
+                "",
+                "Removals:"
+            ]
+            + (map("- `\(.module)@\(.version)` (kept `\(.module)@\(.kept)`)"))
+            | .[]' \
+            prune-plan.json > prune-pr-body.txt
+
+        echo "Prune plan: $(jq -c . prune-plan.json)"
+
+        count="$(jq 'length' prune-plan.json)"
         echo "count=${count}" >> "$GITHUB_OUTPUT"
         if [[ "${count}" -eq 0 ]]; then
             echo "nothing to prune"
@@ -125,66 +201,48 @@ jobs:
         } >> "$GITHUB_OUTPUT"
     - name: Prune superseded versions
       if: steps.plan.outputs.has_plan == 'true'
-      env:
-        PUBLISHED_REF: ${{ steps.baseline.outputs.published_ref }}
       run: |
-        python3 - <<'PY'
-        import json
-        import pathlib
-        import subprocess
+        set -euo pipefail
 
-        plan = json.loads(pathlib.Path("prune-plan.json").read_text())
-        keep = json.loads(pathlib.Path("prune-keep.json").read_text())
+        jq -c '.[]' prune-plan.json | while IFS= read -r entry; do
+            module="$(jq -r '.module' <<< "${entry}")"
+            version="$(jq -r '.version' <<< "${entry}")"
+            kept="$(jq -r '.kept' <<< "${entry}")"
+            metadata_path="modules/${module}/metadata.json"
+            changed=false
 
-        for entry in plan:
-            module = entry["module"]
-            version = entry["version"]
-            kept = keep[module]
-            module_dir = pathlib.Path("modules") / module
-            version_dir = module_dir / version
-            metadata_path = module_dir / "metadata.json"
-            data = json.loads(metadata_path.read_text())
-            changed = False
-            if version_dir.exists():
-                subprocess.run(
-                    ["git", "rm", "-r", str(version_dir)],
-                    check=True)
-                changed = True
-            original_versions = list(data.get("versions", []))
-            data["versions"] = [
-                current
-                for current in original_versions
-                if current != version]
-            yanked_versions = data.get("yanked_versions")
-            had_yanked_version = (
-                isinstance(yanked_versions, dict)
-                and version in yanked_versions)
-            if isinstance(yanked_versions, dict) and version in yanked_versions:
-                del yanked_versions[version]
-            if data["versions"] != original_versions or had_yanked_version:
-                metadata_path.write_text(json.dumps(data, indent=4) + "\n")
-                subprocess.run(["git", "add", str(metadata_path)], check=True)
-                changed = True
-            if not changed:
+            if [[ -d "modules/${module}/${version}" ]]; then
+                git rm -r -q "modules/${module}/${version}"
+                changed=true
+            fi
+
+            tmp_metadata="$(mktemp /tmp/metadata.XXXXXX)"
+            jq --indent 4 \
+                --arg v "${version}" \
+                '.versions -= [$v]
+                 | if (.yanked_versions | type) == "object" then del(.yanked_versions[$v]) else . end' \
+                "${metadata_path}" > "${tmp_metadata}"
+
+            if ! cmp -s "${tmp_metadata}" "${metadata_path}"; then
+                mv "${tmp_metadata}" "${metadata_path}"
+                git add "${metadata_path}"
+                changed=true
+            else
+                rm -f "${tmp_metadata}"
+            fi
+
+            if [[ "${changed}" != "true" ]]; then
                 continue
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "--signoff",
-                    "-m",
-                    f"prune: {module} {version}",
-                    "-m",
-                    (
-                        f"Remove unpublished version {module}@{version} because it "
-                        f"was superseded before publication by {module}@{kept}."
-                    ),
-                ],
-                check=True)
-        PY
+            fi
+
+            git commit -q --signoff \
+                -m "prune: ${module} ${version}" \
+                -m "Remove unpublished version ${module}@${version}, superseded before publication by ${module}@${kept}."
+        done
     - name: Show dry-run commits
       if: inputs.dry-run && steps.plan.outputs.has_plan == 'true'
       run: |
+        set -euo pipefail
         echo "Dry run: no pull request will be created"
         git log --stat --oneline --reverse origin/main..HEAD
     - name: Push prune branch
@@ -195,6 +253,7 @@ jobs:
         BRANCH_NAME: prune/unpublished-versions/${{ github.run_id }}
         GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
       run: |
+        set -euo pipefail
         git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
             HEAD:"refs/heads/${BRANCH_NAME}"
     - name: Create Pull Request

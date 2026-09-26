@@ -35,8 +35,8 @@ jobs:
         fetch-depth: 0
     - name: Test module selection
       run: python3 .github/workflows/registry_select_test.py
-    - name: Test published registry derivation
-      run: python3 .github/workflows/registry_published_test.py
+    - name: Test registry prune plan
+      run: bash .github/workflows/registry_prune_plan_test.sh
     - name: Fetch pull request base SHA
       if: github.event_name == 'pull_request'
       env:
