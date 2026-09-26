@@ -138,20 +138,32 @@ jobs:
             version = entry["version"]
             kept = keep[module]
             module_dir = pathlib.Path("modules") / module
+            version_dir = module_dir / version
             metadata_path = module_dir / "metadata.json"
             data = json.loads(metadata_path.read_text())
-            subprocess.run(
-                ["git", "rm", "-r", str(module_dir / version)],
-                check=True)
+            changed = False
+            if version_dir.exists():
+                subprocess.run(
+                    ["git", "rm", "-r", str(version_dir)],
+                    check=True)
+                changed = True
+            original_versions = list(data.get("versions", []))
             data["versions"] = [
                 current
-                for current in data.get("versions", [])
+                for current in original_versions
                 if current != version]
             yanked_versions = data.get("yanked_versions")
+            had_yanked_version = (
+                isinstance(yanked_versions, dict)
+                and version in yanked_versions)
             if isinstance(yanked_versions, dict) and version in yanked_versions:
                 del yanked_versions[version]
-            metadata_path.write_text(json.dumps(data, indent=4) + "\n")
-            subprocess.run(["git", "add", str(metadata_path)], check=True)
+            if data["versions"] != original_versions or had_yanked_version:
+                metadata_path.write_text(json.dumps(data, indent=4) + "\n")
+                subprocess.run(["git", "add", str(metadata_path)], check=True)
+                changed = True
+            if not changed:
+                continue
             subprocess.run(
                 [
                     "git",

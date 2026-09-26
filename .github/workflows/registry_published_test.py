@@ -88,6 +88,8 @@ class RegistryPublishedTest(unittest.TestCase):
         self.write_module("many", ["1.0.envoy"])
         self.write_module("oldgone", ["1.0.envoy"])
         self.write_module("dirsync", ["1.0.envoy"], dirs=["1.0.envoy", "2.0.envoy"])
+        self.write_module("currentdir", ["1.0.envoy"])
+        self.write_module("metadataonly", ["1.0.envoy"])
         self.commit("published")
         self.git("tag", "v1")
 
@@ -96,6 +98,8 @@ class RegistryPublishedTest(unittest.TestCase):
         self.write_module("many", ["1.0.envoy", "2.0.envoy", "3.0.envoy"])
         self.remove_module("oldgone")
         self.write_module("dirsync", ["1.0.envoy", "2.0.envoy", "3.0.envoy"])
+        self.write_module("currentdir", ["1.0.envoy", "2.0.envoy"], dirs=["1.0.envoy", "2.0.envoy", "3.0.envoy"])
+        self.write_module("metadataonly", ["1.0.envoy", "2.0.envoy", "3.0.envoy"], dirs=["1.0.envoy", "3.0.envoy"])
         self.commit("current")
 
         published = registry_published.published_pairs("v1", self.modules_root)
@@ -107,10 +111,16 @@ class RegistryPublishedTest(unittest.TestCase):
                 "one": ["2.0.envoy"],
                 "many": ["2.0.envoy", "3.0.envoy"],
                 "dirsync": ["3.0.envoy"],
+                "currentdir": ["2.0.envoy", "3.0.envoy"],
+                "metadataonly": ["2.0.envoy", "3.0.envoy"],
             })
         self.assertEqual(
             registry_published.prune_plan(self.modules_root, published),
-            [{"module": "many", "version": "2.0.envoy"}])
+            [
+                {"module": "currentdir", "version": "2.0.envoy"},
+                {"module": "many", "version": "2.0.envoy"},
+                {"module": "metadataonly", "version": "2.0.envoy"},
+            ])
 
     def test_new_module_since_publish_prunes_all_but_last(self):
         self.write_module("published", ["1.0.envoy"])

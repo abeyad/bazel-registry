@@ -99,12 +99,21 @@ def unpublished_versions(modules_root, published):
     modules_root = pathlib.Path(modules_root)
     unpublished = {}
     for metadata in sorted(modules_root.glob("*/metadata.json")):
-        versions = json.loads(metadata.read_text()).get("versions", [])
-        module = metadata.parent.name
-        current = [
-            version
-            for version in versions
-            if (module, version) not in published]
+        declared = json.loads(metadata.read_text()).get("versions", [])
+        module_dir = metadata.parent
+        module = module_dir.name
+        current = []
+        seen = set()
+        for version in declared:
+            if (module, version) in published:
+                continue
+            current.append(version)
+            seen.add(version)
+        for version_dir in sorted(path.name for path in module_dir.iterdir() if path.is_dir()):
+            if version_dir in seen or (module, version_dir) in published:
+                continue
+            current.append(version_dir)
+            seen.add(version_dir)
         if current:
             unpublished[module] = current
     return unpublished
