@@ -28,7 +28,8 @@ def repo_path(path):
         try:
             path = path.relative_to(pathlib.Path.cwd())
         except ValueError:
-            path = pathlib.Path(path.name)
+            raise RuntimeError(
+                f"ERROR: modules root {path} is outside the repository")
     return path.as_posix()
 
 

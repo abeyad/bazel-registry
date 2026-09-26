@@ -143,6 +143,14 @@ class RegistryPublishedTest(unittest.TestCase):
                 {"module": "fresh", "version": "0.2.envoy"},
             ])
 
+    def test_absolute_modules_root_outside_repo_fails(self):
+        self.write_module("published", ["1.0.envoy"])
+        self.commit("published")
+        self.git("tag", "v1")
+
+        with self.assertRaises(RuntimeError):
+            registry_published.published_pairs("v1", "/tmp/not-this-repo/modules")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -187,6 +187,16 @@ jobs:
       run: |
         echo "Dry run: no pull request will be created"
         git log --stat --oneline --reverse origin/main..HEAD
+    - name: Push prune branch
+      if: >-
+        ! inputs.dry-run
+        && steps.plan.outputs.has_plan == 'true'
+      env:
+        BRANCH_NAME: prune/unpublished-versions/${{ github.run_id }}
+        GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
+      run: |
+        git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
+            HEAD:"refs/heads/${BRANCH_NAME}"
     - name: Create Pull Request
       if: >-
         ! inputs.dry-run
