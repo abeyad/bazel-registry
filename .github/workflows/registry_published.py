@@ -109,7 +109,7 @@ def unpublished_versions(modules_root, published):
                 continue
             current.append(version)
             seen.add(version)
-        for version_dir in sorted(path.name for path in module_dir.iterdir() if path.is_dir()):
+        for version_dir in (path.name for path in module_dir.iterdir() if path.is_dir()):
             if version_dir in seen or (module, version_dir) in published:
                 continue
             current.append(version_dir)

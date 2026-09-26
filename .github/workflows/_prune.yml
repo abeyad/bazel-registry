@@ -53,7 +53,11 @@ jobs:
       env:
         GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
       run: |
-        published_ref="$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""' --repo "${{ github.repository }}")"
+        published_ref="$(gh release list \
+            --limit 100 \
+            --json tagName,publishedAt \
+            --jq 'sort_by(.publishedAt) | last | .tagName // ""' \
+            --repo "${{ github.repository }}")"
         if [[ -n "${published_ref}" ]]; then
             echo "Published baseline: ${published_ref}"
         else
