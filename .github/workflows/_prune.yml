@@ -103,7 +103,7 @@ jobs:
             | from_entries' \
             modules/*/metadata.json)"
 
-        current_json="$(
+        current_json="$({
             shopt -s nullglob
             printf '%s\n' modules/*/*/ \
                 | jq -cRs --argjson metadata "${metadata_json}" '
@@ -124,7 +124,7 @@ jobs:
                            )
                          })'
             shopt -u nullglob
-        )"
+        })"
 
         echo "value=${current_json}" >> "$GITHUB_OUTPUT"
     - name: Build prune plan input
