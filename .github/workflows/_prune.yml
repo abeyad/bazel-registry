@@ -53,11 +53,10 @@ jobs:
       env:
         GH_TOKEN: ${{ steps.appauth.outputs.token || github.token }}
       run: |
-        published_ref="$(gh release list \
-            --limit 100 \
-            --json tagName,publishedAt \
-            --jq 'sort_by(.publishedAt) | last | .tagName // ""' \
-            --repo "${{ github.repository }}")"
+        published_ref="$(gh release view \
+            --json tagName \
+            --jq '.tagName // ""' \
+            --repo "${{ github.repository }}" 2>/dev/null || true)"
         if [[ -n "${published_ref}" ]]; then
             echo "Published baseline: ${published_ref}"
         else
@@ -195,7 +194,7 @@ jobs:
       uses: envoyproxy/toolshed/actions/github/pr@98b13b6d4f551c27b406cb090d9ff7bf6877d1f6  # actions-v0.4.20 + fix
       with:
         base: main
-        branch: prune/unpublished-versions
+        branch: prune/unpublished-versions/${{ github.run_id }}
         commit: false
         title: Prune superseded unpublished module versions
         body: ${{ steps.plan.outputs.body }}
