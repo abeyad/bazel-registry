@@ -1,0 +1,17 @@
+{
+  "homepage": "https://github.com/envoyproxy/envoy",
+  "maintainers": [
+    {
+      "email": "maintainers@envoyproxy.io",
+      "github": "envoyproxy",
+      "name": "Envoy Proxy Maintainers"
+    }
+  ],
+  "repository": [
+    "github:envoyproxy/envoy"
+  ],
+  "versions": [
+    "1.40.0-dev.20260927.5f95744.envoy"
+  ],
+  "yanked_versions": {}
+}
