@@ -1,0 +1,5 @@
+{
+    "url": "https://github.com/envoyproxy/examples/archive/v0.2.7.tar.gz",
+    "integrity": "sha256-Wr08MX6gQoxI8zu+okLNEsg9MD0pj3gYT73Tb1xn0UA=",
+    "strip_prefix": "examples-0.2.7/wasm-cc"
+}
