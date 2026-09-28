@@ -740,7 +740,7 @@ index ff75f92..3843aa2 100644
  
  namespace google {
 diff --git a/src/google/protobuf/util/converter/datapiece.cc b/src/google/protobuf/util/converter/datapiece.cc
-index 3acd35d..c7c12ef 100644
+index 3acd35d..4ec87c1 100644
 --- a/src/google/protobuf/util/converter/datapiece.cc
 +++ b/src/google/protobuf/util/converter/datapiece.cc
 @@ -18,18 +18,17 @@
@@ -767,6 +767,37 @@ index 3acd35d..c7c12ef 100644
  
  namespace google {
  namespace protobuf {
+@@ -225,8 +224,7 @@ absl::StatusOr<std::string> DataPiece::ToString() const {
+     case TYPE_STRING:
+       return std::string(str_);
+     case TYPE_BYTES: {
+-      std::string base64;
+-      absl::Base64Escape(str_, &base64);
++      std::string base64 = absl::Base64Escape(str_);
+       return base64;
+     }
+     default:
+@@ -255,8 +253,7 @@ std::string DataPiece::ValueAsStringOrDefault(
+     case TYPE_STRING:
+       return absl::StrCat("\"", str_, "\"");
+     case TYPE_BYTES: {
+-      std::string base64;
+-      absl::WebSafeBase64Escape(str_, &base64);
++      std::string base64 = absl::WebSafeBase64Escape(str_);
+       return absl::StrCat("\"", base64, "\"");
+     }
+     case TYPE_NULL:
+@@ -380,9 +377,8 @@ bool DataPiece::DecodeBase64(absl::string_view src, std::string* dest) const {
+     if (use_strict_base64_decoding_) {
+       // In strict mode, check if the escaped version gives us the same value as
+       // unescaped.
+-      std::string encoded;
+       // WebSafeBase64Escape does no padding by default.
+-      absl::WebSafeBase64Escape(*dest, &encoded);
++      std::string encoded = absl::WebSafeBase64Escape(*dest);
+       // Remove trailing padding '=' characters before comparison.
+       absl::string_view src_no_padding = absl::string_view(src).substr(
+           0, absl::EndsWith(src, "=") ? src.find_last_not_of('=') + 1
 diff --git a/src/google/protobuf/util/converter/datapiece.h b/src/google/protobuf/util/converter/datapiece.h
 index 68b6b0e..fc25a7a 100644
 --- a/src/google/protobuf/util/converter/datapiece.h
@@ -928,6 +959,19 @@ index 03736d7..c3a8ec2 100644
  
  namespace google {
  namespace protobuf {
+diff --git a/src/google/protobuf/util/converter/json_objectwriter.cc b/src/google/protobuf/util/converter/json_objectwriter.cc
+index 098a74b..67c51e8 100644
+--- a/src/google/protobuf/util/converter/json_objectwriter.cc
++++ b/src/google/protobuf/util/converter/json_objectwriter.cc
+@@ -137,7 +137,7 @@ JsonObjectWriter* JsonObjectWriter::RenderBytes(absl::string_view name,
+   if (use_websafe_base64_for_bytes_)
+     WebSafeBase64EscapeWithPadding(value, &base64);
+   else
+-    absl::Base64Escape(value, &base64);
++    base64 = absl::Base64Escape(value);
+ 
+   WriteChar('"');
+   // TODO(wpoon): Consider a ByteSink solution that writes the base64 bytes
 diff --git a/src/google/protobuf/util/converter/json_objectwriter.h b/src/google/protobuf/util/converter/json_objectwriter.h
 index e3caf4d..4069682 100644
 --- a/src/google/protobuf/util/converter/json_objectwriter.h
