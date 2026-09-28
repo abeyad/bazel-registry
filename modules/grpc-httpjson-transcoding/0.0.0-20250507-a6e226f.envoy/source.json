@@ -5,6 +5,7 @@
     "patch_strip": 1,
     "patches": {
         "grpc-httpjson-transcoding.patch": "sha256-Q2uIePDJDjVjiJ3/fUN1YPamsezqOKVtXscHoiOY6So=",
-        "module_dot_bazel.patch": "sha256-/q6F+0k80j6V3HjWXeLawHaTDeDEPQRYQpsBqYssluo="
+        "module_dot_bazel.patch": "sha256-/q6F+0k80j6V3HjWXeLawHaTDeDEPQRYQpsBqYssluo=",
+        "absl-mutexlock.patch": "sha256-OPxzaPeRAaJJwidP9ZTTse7Pl4PZeQN0CUJLnPsBZXM="
     }
 }
