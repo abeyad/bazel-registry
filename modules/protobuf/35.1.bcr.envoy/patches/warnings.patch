@@ -1,0 +1,168 @@
+diff -ruN a/src/google/protobuf/arena.cc b/src/google/protobuf/arena.cc
+--- a/src/google/protobuf/arena.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/arena.cc	2026-09-28 13:51:18.039199156 +0000
+@@ -700,7 +700,7 @@
+   }
+ 
+   // Slow path with acquiring mutex.
+-  absl::MutexLock lock(&mutex_);
++  absl::MutexLock lock(mutex_);
+ 
+   // Refetch and if someone else installed a new head, try allocating on that!
+   SerialArenaChunk* new_head = head_.load(std::memory_order_acquire);
+diff -ruN a/src/google/protobuf/descriptor.cc b/src/google/protobuf/descriptor.cc
+--- a/src/google/protobuf/descriptor.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/descriptor.cc	2026-09-28 13:51:18.041061898 +0000
+@@ -1982,7 +1982,7 @@
+                                                 absl::string_view name) {
+   if (pool->mutex_ != nullptr) {
+     // Fast path: the Symbol is already cached.  This is just a hash lookup.
+-    absl::ReaderMutexLock lock(pool->mutex_);
++    absl::ReaderMutexLock lock(*pool->mutex_);
+     if (known_bad_symbols_.empty() && known_bad_files_.empty()) {
+       Symbol result = FindSymbol(name);
+       if (!result.IsNull()) return result;
+@@ -2139,7 +2139,7 @@
+ 
+   // Second try, with reader lock held on unknown enum values: common case.
+   {
+-    absl::ReaderMutexLock l(&unknown_enum_values_mu_);
++    absl::ReaderMutexLock l(unknown_enum_values_mu_);
+     auto it = unknown_enum_values_by_number_.find(query);
+     if (it != unknown_enum_values_by_number_.end()) {
+       return *it;
+@@ -2148,7 +2148,7 @@
+   // If not found, try again with writer lock held, and create new descriptor if
+   // necessary.
+   {
+-    absl::WriterMutexLock l(&unknown_enum_values_mu_);
++    absl::WriterMutexLock l(unknown_enum_values_mu_);
+     auto it = unknown_enum_values_by_number_.find(query);
+     if (it != unknown_enum_values_by_number_.end()) {
+       return *it;
+@@ -2649,7 +2649,7 @@
+   // A faster path to reduce lock contention in finding extensions, assuming
+   // most extensions will be cache hit.
+   if (mutex_ != nullptr) {
+-    absl::ReaderMutexLock lock(mutex_);
++    absl::ReaderMutexLock lock(*mutex_);
+     const FieldDescriptor* result = tables_->FindExtension(extendee, number);
+     if (result != nullptr) {
+       return result;
+diff -ruN a/src/google/protobuf/descriptor.h b/src/google/protobuf/descriptor.h
+--- a/src/google/protobuf/descriptor.h	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/descriptor.h	2026-09-28 13:51:18.039839845 +0000
+@@ -2699,7 +2699,7 @@
+     static bool type_key;
+     auto key = std::pair<const void*, const void*>(descriptor, &type_key);
+     {
+-      absl::ReaderMutexLock lock(&pool->field_memo_table_mutex_);
++      absl::ReaderMutexLock lock(pool->field_memo_table_mutex_);
+       auto it = pool->field_memo_table_->find(key);
+       if (it != pool->field_memo_table_->end()) {
+         return internal::DownCast<const MemoData<ResultT>&>(*it->second).value;
+@@ -2708,7 +2708,7 @@
+     auto result = std::make_unique<MemoData<ResultT>>();
+     result->value = func(descriptor);
+     {
+-      absl::MutexLock lock(&pool->field_memo_table_mutex_);
++      absl::MutexLock lock(pool->field_memo_table_mutex_);
+       auto insert_result =
+           pool->field_memo_table_->insert({key, std::move(result)});
+       auto it = insert_result.first;
+diff -ruN a/src/google/protobuf/dynamic_message.cc b/src/google/protobuf/dynamic_message.cc
+--- a/src/google/protobuf/dynamic_message.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/dynamic_message.cc	2026-09-28 13:51:18.041469039 +0000
+@@ -877,7 +877,7 @@
+ const Message* PROTOBUF_NONNULL
+ DynamicMessageFactory::GetPrototype(const Descriptor* PROTOBUF_NONNULL type) {
+   ABSL_CHECK(type != nullptr);
+-  absl::MutexLock lock(&prototypes_mutex_);
++  absl::MutexLock lock(prototypes_mutex_);
+   return GetPrototypeNoLock(type);
+ }
+ 
+diff -ruN a/src/google/protobuf/map.cc b/src/google/protobuf/map.cc
+--- a/src/google/protobuf/map.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/map.cc	2026-09-28 13:51:18.041524656 +0000
+@@ -283,7 +283,7 @@
+ void UntypedMapBase::InsertOrReplaceNodes(Arena* arena, NodeBase* list,
+                                           map_index_t count) {
+   if (ABSL_PREDICT_FALSE(count == 0)) return;
+-  VisitKeyType([=](auto key_type) {
++  VisitKeyType([this, arena, list, count](auto key_type) {
+     using Key = typename decltype(key_type)::type;
+     static_cast<KeyMapBase<Key>&>(*this).InsertOrReplaceNodes(
+         arena, static_cast<typename KeyMapBase<Key>::KeyNode*>(list), count);
+diff -ruN a/src/google/protobuf/map_field.cc b/src/google/protobuf/map_field.cc
+--- a/src/google/protobuf/map_field.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/map_field.cc	2026-09-28 13:51:18.041310715 +0000
+@@ -266,7 +266,7 @@
+   ConstAccess();
+   size_t size = 0;
+   if (auto* p = maybe_payload()) {
+-    absl::MutexLock lock(&p->mutex());
++    absl::MutexLock lock(p->mutex());
+     // Measure the map under the lock, because there could be some repeated
+     // field data that might be sync'd back into the map.
+     size = GetMapRaw().SpaceUsedExcludingSelfLong();
+@@ -316,7 +316,7 @@
+     }
+ 
+     {
+-      absl::MutexLock lock(&p->mutex());
++      absl::MutexLock lock(p->mutex());
+       // Double check state, because another thread may have seen the same
+       // state and done the synchronization before the current thread.
+       if (p->load_state_relaxed() == STATE_MODIFIED_MAP) {
+@@ -425,7 +425,7 @@
+   if (state() == STATE_MODIFIED_REPEATED) {
+     auto& p = payload();
+     {
+-      absl::MutexLock lock(&p.mutex());
++      absl::MutexLock lock(p.mutex());
+       // Double check state, because another thread may have seen the same state
+       // and done the synchronization before the current thread.
+       if (p.load_state_relaxed() == STATE_MODIFIED_REPEATED) {
+diff -ruN a/src/google/protobuf/message.cc b/src/google/protobuf/message.cc
+--- a/src/google/protobuf/message.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/message.cc	2026-09-28 13:51:18.039382661 +0000
+@@ -609,7 +609,7 @@
+     result = dropped_defaults_factory_.GetPrototype(type);
+ 
+     {
+-      absl::WriterMutexLock lock(&mutex_);
++      absl::WriterMutexLock lock(mutex_);
+       // And update the main map to make the next lookup faster.
+       // We don't need to recheck here. Even if someone raced us here the result
+       // is the same, so we can just write it.
+@@ -624,7 +624,7 @@
+     const Descriptor* type) {
+   absl::optional<const Message*> result;
+   {
+-    absl::ReaderMutexLock lock(&mutex_);
++    absl::ReaderMutexLock lock(mutex_);
+     result = FindInTypeMap(type);
+     if (result.has_value() && *result != nullptr) {
+       return *result;
+@@ -646,7 +646,7 @@
+   }
+ 
+   {
+-    absl::WriterMutexLock lock(&mutex_);
++    absl::WriterMutexLock lock(mutex_);
+ 
+     // Check if another thread preempted us.
+     result = FindInTypeMap(type);
+diff -ruN a/src/google/protobuf/message_lite.cc b/src/google/protobuf/message_lite.cc
+--- a/src/google/protobuf/message_lite.cc	2026-06-11 16:26:38.000000000 +0000
++++ b/src/google/protobuf/message_lite.cc	2026-09-28 13:51:18.041391630 +0000
+@@ -785,7 +785,7 @@
+ 
+ void OnShutdownRun(void (*f)(const void*), const void* arg) {
+   auto shutdown_data = ShutdownData::get();
+-  absl::MutexLock lock(&shutdown_data->mutex);
++  absl::MutexLock lock(shutdown_data->mutex);
+   shutdown_data->functions.push_back(std::make_pair(f, arg));
+ }
+ 
