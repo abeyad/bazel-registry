@@ -1,0 +1,161 @@
+diff -ruN a/src/google/protobuf/compiler/cpp/enum.cc b/src/google/protobuf/compiler/cpp/enum.cc
+--- a/src/google/protobuf/compiler/cpp/enum.cc	2026-09-28 12:03:56.767305294 +0000
++++ b/src/google/protobuf/compiler/cpp/enum.cc	2026-09-28 12:03:56.768928902 +0000
+@@ -43,6 +43,7 @@
+     const EnumDescriptor* enum_, const Options& options,
+     const EnumValueDescriptor* min, const EnumValueDescriptor* max) {
+   auto classname = ClassName(enum_, false);
++  const bool is_deprecated = enum_->options().deprecated();
+   return {
+       {"Enum", std::string(enum_->name())},
+       {"Enum_", ResolveKnownNameCollisions(enum_->name(),
+@@ -63,6 +64,10 @@
+                           : "const ::std::string&"},
+       // TODO: Enable this everywhere.
+       {"nodiscard", options.opensource_runtime ? "[[nodiscard]]" : ""},
++      {"IGNORE_DEPRECATION_START",
++       is_deprecated ? "PROTOBUF_IGNORE_DEPRECATION_START\n" : ""},
++      {"IGNORE_DEPRECATION_STOP",
++       is_deprecated ? "PROTOBUF_IGNORE_DEPRECATION_STOP\n" : ""},
+   };
+ }
+ 
+@@ -183,11 +188,13 @@
+           $open_enum_sentinels$,
+         };
+ 
++        $IGNORE_DEPRECATION_START$
+         $dllexport_decl $extern const uint32_t $Msg_Enum$_internal_data_[];
+         inline constexpr $Msg_Enum$ $Msg_Enum_Enum_MIN$ =
+             static_cast<$Msg_Enum$>($kMin$);
+         inline constexpr $Msg_Enum$ $Msg_Enum_Enum_MAX$ =
+             static_cast<$Msg_Enum$>($kMax$);
++        $IGNORE_DEPRECATION_STOP$
+       )cc");
+ 
+   // Generate the inline `_IsValid` function choosing the best implementation
+@@ -206,16 +213,20 @@
+ 
+   if (has_reflection_) {
+     p->Emit(R"cc(
++      $IGNORE_DEPRECATION_START$
+       $nodiscard $$dllexport_decl $const $pb$::EnumDescriptor* $nonnull$
+       $Msg_Enum$_descriptor();
+       //~ ADL Hook
+       $nodiscard $inline auto ProtobufInternalGetEnumDescriptor($Msg_Enum$) {
+         return $Msg_Enum$_descriptor();
+       }
++      $IGNORE_DEPRECATION_STOP$
+     )cc");
+   } else {
+     p->Emit(R"cc(
++      $IGNORE_DEPRECATION_START$
+       $nodiscard $$return_type$ $Msg_Enum$_Name($Msg_Enum$ value);
++      $IGNORE_DEPRECATION_STOP$
+     )cc");
+   }
+ 
+@@ -248,11 +259,13 @@
+       // stores internally.  This cache is a simple contiguous array of
+       // pointers, so if the enum values are sparse, it's not worth it.
+       p->Emit(R"cc(
++        $IGNORE_DEPRECATION_START$
+         template <>
+         $nodiscard $inline $return_type$ $Msg_Enum$_Name($Msg_Enum$ value) {
+           return $pbi$::NameOfDenseEnum<$Msg_Enum$_descriptor, $kMin$, $kMax$>(
+               static_cast<int>(value));
+         }
++        $IGNORE_DEPRECATION_STOP$
+       )cc");
+     }
+   } else {
+@@ -267,24 +280,29 @@
+ 
+   if (has_reflection_) {
+     p->Emit(R"cc(
++      $IGNORE_DEPRECATION_START$
+       $nodiscard $inline bool $Msg_Enum$_Parse(
+           //~
+           ::absl::string_view name, $Msg_Enum$* $nonnull$ value) {
+         return $pbi$::ParseNamedEnum<$Msg_Enum$>($Msg_Enum$_descriptor(), name,
+                                                  value);
+       }
++      $IGNORE_DEPRECATION_STOP$
+     )cc");
+   } else {
+     p->Emit(R"cc(
++      $IGNORE_DEPRECATION_START$
+       $nodiscard $bool $Msg_Enum$_Parse(
+           //~
+           ::absl::string_view name, $Msg_Enum$* $nonnull$ value);
++      $IGNORE_DEPRECATION_STOP$
+     )cc");
+   }
+ }
+ 
+ void EnumGenerator::GenerateGetEnumDescriptorSpecializations(io::Printer* p) {
+   auto v = p->WithVars(EnumVars(enum_, options_, limits_.min, limits_.max));
++  p->Emit(R"cc($IGNORE_DEPRECATION_START$)cc");
+ 
+   p->Emit(R"cc(
+     template <>
+@@ -307,11 +325,15 @@
+       };
+     )cc");
+   }
++  p->Emit(R"cc($IGNORE_DEPRECATION_STOP$)cc");
+ }
+ 
+ 
+ void EnumGenerator::GenerateSymbolImports(io::Printer* p) const {
+   auto v = p->WithVars(EnumVars(enum_, options_, limits_.min, limits_.max));
++  const bool enum_deprecated = enum_->options().deprecated();
++
++  p->Emit(R"cc($IGNORE_DEPRECATION_START$)cc");
+ 
+   p->Emit({Sub("Enum_", p->LookupVar("Enum_")).AnnotatedAs(enum_)}, R"cc(
+     using $Enum_$ = $Msg_Enum$;
+@@ -324,9 +346,19 @@
+             Sub("VALUE", EnumValueName(enum_->value(j))).AnnotatedAs(value),
+             {"DEPRECATED",
+              value->options().deprecated() ? "[[deprecated]]" : ""},
++            {"IGNORE_DEPRECATION_START",
++             !enum_deprecated && value->options().deprecated()
++                 ? "PROTOBUF_IGNORE_DEPRECATION_START\n"
++                 : ""},
++            {"IGNORE_DEPRECATION_STOP",
++             !enum_deprecated && value->options().deprecated()
++                 ? "PROTOBUF_IGNORE_DEPRECATION_STOP\n"
++                 : ""},
+         },
+         R"cc(
++          $IGNORE_DEPRECATION_START$
+           $DEPRECATED $static constexpr $Enum_$ $VALUE$ = $Msg_Enum$_$VALUE$;
++          $IGNORE_DEPRECATION_STOP$
+         )cc");
+   }
+ 
+@@ -375,6 +407,7 @@
+       return $Msg_Enum$_Parse(name, value);
+     }
+   )cc");
++  p->Emit(R"cc($IGNORE_DEPRECATION_STOP$)cc");
+ }
+ 
+ void EnumGenerator::GenerateIsValid(io::Printer* p) const {
+@@ -421,6 +454,7 @@
+ 
+ void EnumGenerator::GenerateMethods(int idx, io::Printer* p) {
+   auto v = p->WithVars(EnumVars(enum_, options_, limits_.min, limits_.max));
++  p->Emit(R"cc($IGNORE_DEPRECATION_START$)cc");
+ 
+   if (has_reflection_) {
+     p->Emit({{"idx", idx}}, R"cc(
+@@ -601,6 +635,7 @@
+       )cc");
+     }
+   }
++  p->Emit(R"cc($IGNORE_DEPRECATION_STOP$)cc");
+ }
+ }  // namespace cpp
+ }  // namespace compiler
