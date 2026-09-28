@@ -196,6 +196,7 @@ cc_library(
     copts = [
         "-fvisibility=hidden",
         "-DHAVE_LIBUNWIND=0",
+        "-Wno-address-of-packed-member",
         "-Wno-unused-variable",
         "-Wno-error=array-bounds",
     ],
@@ -221,6 +222,7 @@ cc_library(
         "src/svm/svm_fifo.c",
     ],
     hdrs = glob(["src/svm/*.h"]),
+    copts = ["-Wno-address-of-packed-member"],
     includes = ["src"],
     linkopts = [
         "-lpthread",
@@ -267,6 +269,7 @@ cc_library(
     hdrs = glob(["src/vcl/*.h"]) + [":vppcom_root_h"],
     copts = [
         "-D_GNU_SOURCE",
+        "-Wno-address-of-packed-member",
         "-Wno-unused-variable",
         "-Wno-error=array-bounds",
     ],

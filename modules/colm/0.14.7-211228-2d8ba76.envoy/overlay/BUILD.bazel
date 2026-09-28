@@ -115,7 +115,9 @@ cc_library(
     ],
     copts = [
         "-Wall",
+        "-Wno-unused-variable",
         "-Wno-unused-parameter",
+        "-Wno-unused-but-set-variable",
         "-Wno-sign-compare",
     ],
     includes = ["src"],
