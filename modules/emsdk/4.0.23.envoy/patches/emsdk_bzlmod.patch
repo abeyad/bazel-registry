@@ -202,7 +202,7 @@ index 819a048..31168a4 100644
          ],
      )
  
-+    normalized_exec_compatible_with = [str(constraint) for constraint in exec_compatible_with]
++    normalized_exec_compatible_with = [Label(str(constraint)) for constraint in exec_compatible_with]
 +
      emscripten_cc_toolchain_config_rule(
          name = wasm_name,
@@ -215,7 +215,7 @@ index 819a048..31168a4 100644
 -            "//conditions:default": "sh",
 -        }),
 +        python_bin = "@python_3_12//:files",
-+        script_extension = "bat" if "@platforms//os:windows" in normalized_exec_compatible_with or str(Label("@platforms//os:windows")) in normalized_exec_compatible_with else "sh",
++        script_extension = "bat" if Label("@platforms//os:windows") in normalized_exec_compatible_with else "sh",
      )
  
      native.cc_toolchain(
