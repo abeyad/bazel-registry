@@ -38,7 +38,7 @@ index 84ea112..c368ab8 100644
              protobuf or "@com_google_protobuf//:protobuf",
              re2 or "@com_googlesource_code_re2//:re2",
          ],
-         copts = copts + select({
+         copts = copts + ["-Wno-deprecated-declarations"] + select({
 -            "@com_envoyproxy_protoc_gen_validate//bazel:windows_x86_64": ["-DWIN32"],
 +            Label("//bazel:windows_x86_64"): ["-DWIN32"],
              "//conditions:default": [],
