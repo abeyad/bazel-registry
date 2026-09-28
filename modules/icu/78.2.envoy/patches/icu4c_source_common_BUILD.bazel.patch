@@ -1,10 +1,16 @@
 diff --git a/source/common/BUILD.bazel b/source/common/BUILD.bazel
-index e894ed9..496ec24 100644
+index e894ed9..6090b44 100644
 --- a/source/common/BUILD.bazel
 +++ b/source/common/BUILD.bazel
-@@ -13,10 +13,10 @@ package(
+@@ -12,11 +12,16 @@ package(
+     default_visibility = ["//visibility:public"],
  )
  
++config_setting(
++    name = "clang",
++    flag_values = {"@bazel_tools//tools/cpp:compiler": "clang"},
++)
++
  # When compiling code in the `common` dir, the constant
 -# `U_COMMON_IMPLEMENTATION` needs to be defined. See 
 +# `U_COMMON_IMPLEMENTATION` needs to be defined. See
@@ -15,7 +21,7 @@ index e894ed9..496ec24 100644
  # not specified correctly. Use dependencies.txt in depstest for assistance. See
  # https://stackoverflow.com/q/66111709/2077918 .
  
-@@ -43,37 +43,20 @@ cc_library(
+@@ -43,37 +48,24 @@ cc_library(
  
  cc_library(
      name = "platform",
@@ -53,6 +59,10 @@ index e894ed9..496ec24 100644
          "U_COMMON_IMPLEMENTATION",
      ],
 -    linkopts = ["-ldl"],
++    copts = select({
++        ":clang": ["-Wno-thread-safety-analysis"],
++        "//conditions:default": [],
++    }),
 +    linkopts = select({
 +        "@platforms//os:linux": ["-ldl"],
 +        "//conditions:default": [],
@@ -60,7 +70,7 @@ index e894ed9..496ec24 100644
  )
  
  cc_library(
-@@ -1214,6 +1197,6 @@ cc_library(
+@@ -1214,6 +1206,6 @@ cc_library(
          ":headers",
      ],
      local_defines = [
@@ -69,7 +79,7 @@ index e894ed9..496ec24 100644
      ],
  )
 diff --git a/source/i18n/BUILD.bazel b/source/i18n/BUILD.bazel
-index 2d85cdb..b7addd9 100644
+index 2d85cdb..4e3e207 100644
 --- a/source/i18n/BUILD.bazel
 +++ b/source/i18n/BUILD.bazel
 @@ -13,10 +13,10 @@ package(
@@ -125,3 +135,51 @@ index 2d85cdb..b7addd9 100644
      deps = [
          ":headers",
          ":uclean_i18n",
+@@ -88,6 +60,10 @@ cc_library(
+         "//icu4c/source/common:uvector32",
+         "//icu4c/source/common:uvector64",
+     ],
++    copts = select({
++        "//icu4c/source/common:clang": ["-Wno-thread-safety-analysis"],
++        "//conditions:default": [],
++    }),
+     local_defines = [
+         "U_I18N_IMPLEMENTATION",
+     ],
+@@ -109,6 +85,10 @@ cc_library(
+         "//icu4c/source/common:ucharstriebuilder",
+         "//icu4c/source/common:uset_props"
+     ],
++    copts = select({
++        "//icu4c/source/common:clang": ["-Wno-thread-safety-analysis"],
++        "//conditions:default": [],
++    }),
+     local_defines = [
+         "U_I18N_IMPLEMENTATION",
+     ],
+@@ -124,6 +104,10 @@ cc_library(
+     deps = [
+         "//icu4c/source/common:platform",
+     ],
++    copts = select({
++        "//icu4c/source/common:clang": ["-Wno-thread-safety-analysis"],
++        "//conditions:default": [],
++    }),
+     local_defines = [
+         "U_I18N_IMPLEMENTATION",
+     ],
+diff --git a/source/stubdata/BUILD.bazel b/source/stubdata/BUILD.bazel
+index 20344ef..949d347 100644
+--- a/source/stubdata/BUILD.bazel
++++ b/source/stubdata/BUILD.bazel
+@@ -18,6 +18,10 @@ cc_library(
+     srcs = ["stubdata.cpp"],
+     hdrs = ["stubdata.h"],
+     deps = ["//icu4c/source/common:headers"],
++    copts = select({
++        "//icu4c/source/common:clang": ["-Wno-thread-safety-analysis"],
++        "//conditions:default": [],
++    }),
+     local_defines = [
+         "U_COMMON_IMPLEMENTATION",
+     ],
