@@ -192,15 +192,21 @@ diff -urN orig/bazel/antlr.bzl mod/bazel/antlr.bzl
 diff -urN orig/bazel/copts.bzl mod/bazel/copts.bzl
 --- orig/bazel/copts.bzl	1970-01-01 00:00:00.000000000 +0000
 +++ mod/bazel/copts.bzl	2026-09-28 11:26:51.798370088 +0000
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,15 @@
 +"""Envoy registry: compiler options applied to all cel-cpp C++ targets."""
 +
-+# cel-cpp's own .bazelrc builds with -Wno-deprecated-declarations; abseil
-+# ABSL_DEPRECATE_AND_INLINE shims used throughout cel-cpp headers otherwise
-+# fire in every consuming TU.
 +CEL_COPTS = select({
 +    "@platforms//os:windows": [],
-+    "//conditions:default": ["-Wno-deprecated-declarations"],
++    "//conditions:default": [
++        # cel-cpp's own .bazelrc builds with -Wno-deprecated-declarations; abseil
++        # ABSL_DEPRECATE_AND_INLINE shims used throughout cel-cpp headers otherwise
++        # fire in every consuming TU.
++        "-Wno-deprecated-declarations",
++        # cel-cpp mixes absl::Nonnull/Nullable-annotated and unannotated pointers in the
++        # same headers (e.g. common/allocator.h, parser/parser_interface.h); clang then
++        # warns on every unannotated pointer in any TU that includes them.
++        "-Wno-nullability-completeness",
++    ],
 +})
 diff -urN orig/checker/BUILD mod/checker/BUILD
 --- orig/checker/BUILD	2026-08-13 22:12:09.000000000 +0000
