@@ -12,7 +12,8 @@
     ],
     "versions": [
         "0.0.0-260831-5c9cc6b.envoy",
-        "0.0.0-260922-7f07dc4.envoy"
+        "0.0.0-260922-7f07dc4.envoy",
+        "0.0.0-261002-f9e75eb.envoy"
     ],
     "yanked_versions": {}
 }
